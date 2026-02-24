@@ -8,9 +8,22 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { 
     cors: { 
-        origin: '*',
-        methods: ['GET', 'POST']
+        origin: [
+            'http://fominhaxeventos.com',
+            'https://fominhaxeventos.com',
+            'http://www.fominhaxeventos.com',
+            'https://www.fominhaxeventos.com',
+            'http://localhost:3000',
+            'http://localhost:5500'
+        ],
+        methods: ['GET', 'POST'],
+        credentials: true
     } 
+});
+
+// Rota de health check para o Render
+app.get('/', (req, res) => {
+    res.send('🚀 Servidor do Domínio Urbano está rodando!');
 });
 
 // Servir arquivos estáticos da pasta DOMINIO
@@ -179,7 +192,7 @@ function createInitialGameState(players, factions) {
     // Distribuir territórios alternadamente (4 cada)
     const territories = shuffled.map((t, index) => ({
         ...t,
-        owner: index < 4 ? p1Id : p2Id, // Primeiros 4 para jogador 1, últimos 4 para jogador 2
+        owner: index < 4 ? p1Id : p2Id,
         pc: 3,
         defenseBonus: 0
     }));
@@ -431,15 +444,13 @@ function endTurn(roomId, playerId) {
 io.on('connection', (socket) => {
     console.log('Cliente conectado:', socket.id);
     
-    // Entrar no jogo (matchmaking automático) - CORRIGIDO
+    // Entrar no jogo (matchmaking automático)
     socket.on('joinGame', ({ faction }, callback) => {
         console.log(`Jogador ${socket.id} tentando entrar com facção ${faction}`);
         
-        // Procurar sala aguardando
         let roomId = Object.keys(rooms).find(id => rooms[id].players.length === 1 && !rooms[id].gameState);
         
         if (!roomId) {
-            // Criar nova sala
             roomId = generateRoomId();
             rooms[roomId] = {
                 players: [socket.id],
@@ -451,97 +462,49 @@ io.on('connection', (socket) => {
             console.log(`Nova sala criada: ${roomId}`);
             callback({ roomId, status: 'waiting' });
         } else {
-            // Entrar em sala existente
             const room = rooms[roomId];
             room.players.push(socket.id);
             room.factions[socket.id] = faction;
             socket.join(roomId);
-            
-            // Criar estado do jogo
             room.gameState = createInitialGameState(room.players, room.factions);
-            
             console.log(`Jogador entrou na sala ${roomId}. Jogo iniciado!`);
-            
-            // Notificar o jogador que entrou
             callback({ roomId, status: 'start' });
-            
-            // NOTIFICAR O JOGADOR QUE CRIOU A SALA
             const firstPlayerId = room.players[0];
-            io.to(firstPlayerId).emit('gameStart', {
-                roomId: roomId,
-                message: 'Um oponente entrou! O jogo vai começar!'
-            });
-            
-            // Notificar ambos com o estado do jogo
+            io.to(firstPlayerId).emit('gameStart', { roomId, message: 'Um oponente entrou!' });
             io.to(roomId).emit('gameStateUpdate', room.gameState);
-            io.to(roomId).emit('log', {
-                message: 'Jogo iniciado! Boa sorte!',
-                type: 'system'
-            });
+            io.to(roomId).emit('log', { message: 'Jogo iniciado! Boa sorte!', type: 'system' });
         }
     });
     
-    // Entrar em sala específica com código - CORRIGIDO
+    // Entrar em sala específica com código
     socket.on('joinRoomWithCode', ({ roomCode, faction }) => {
         console.log(`Jogador ${socket.id} tentando entrar na sala ${roomCode}`);
-        
-        // Verificar se a sala existe
         const room = rooms[roomCode];
         
         if (!room) {
-            socket.emit('roomJoinResponse', { 
-                success: false, 
-                message: 'Sala não encontrada!' 
-            });
+            socket.emit('roomJoinResponse', { success: false, message: 'Sala não encontrada!' });
             return;
         }
-        
         if (room.players.length >= 2) {
-            socket.emit('roomJoinResponse', { 
-                success: false, 
-                message: 'Sala já está cheia!' 
-            });
+            socket.emit('roomJoinResponse', { success: false, message: 'Sala já está cheia!' });
             return;
         }
-        
         if (room.gameState) {
-            socket.emit('roomJoinResponse', { 
-                success: false, 
-                message: 'Jogo já iniciou!' 
-            });
+            socket.emit('roomJoinResponse', { success: false, message: 'Jogo já iniciou!' });
             return;
         }
         
-        // Entrar na sala
         room.players.push(socket.id);
         room.factions[socket.id] = faction;
         socket.join(roomCode);
-        
-        // Criar estado do jogo
         room.gameState = createInitialGameState(room.players, room.factions);
-        
         console.log(`Jogador entrou na sala ${roomCode}. Jogo iniciado!`);
         
-        // NOTIFICAR O JOGADOR QUE ENTROU
-        socket.emit('roomJoinResponse', { 
-            success: true, 
-            roomId: roomCode,
-            status: 'start' 
-        });
-        
-        // NOTIFICAR O JOGADOR QUE CRIOU A SALA
+        socket.emit('roomJoinResponse', { success: true, roomId: roomCode, status: 'start' });
         const firstPlayerId = room.players[0];
-        io.to(firstPlayerId).emit('gameStart', {
-            roomId: roomCode,
-            message: 'Um oponente entrou! O jogo vai começar!'
-        });
-        
-        // Notificar TODOS na sala com o estado do jogo
+        io.to(firstPlayerId).emit('gameStart', { roomId: roomCode, message: 'Um oponente entrou!' });
         io.to(roomCode).emit('gameStateUpdate', room.gameState);
-        io.to(roomCode).emit('log', {
-            message: 'Jogo iniciado! Boa sorte!',
-            type: 'system'
-        });
+        io.to(roomCode).emit('log', { message: 'Jogo iniciado! Boa sorte!', type: 'system' });
     });
     
     // Sair da sala
@@ -551,9 +514,7 @@ io.on('connection', (socket) => {
             const index = room.players.indexOf(socket.id);
             if (index !== -1) {
                 room.players.splice(index, 1);
-                if (room.players.length === 0) {
-                    delete rooms[roomId];
-                }
+                if (room.players.length === 0) delete rooms[roomId];
             }
         }
         socket.leave(roomId);
@@ -561,72 +522,49 @@ io.on('connection', (socket) => {
     
     // Ações do jogo
     socket.on('gameAction', ({ type, data }) => {
-        // Encontrar sala do jogador
-        const roomEntry = Object.entries(rooms).find(([_, room]) => 
-            room.players.includes(socket.id)
-        );
-        
+        const roomEntry = Object.entries(rooms).find(([_, room]) => room.players.includes(socket.id));
         if (!roomEntry) {
             socket.emit('error', 'Você não está em uma sala');
             return;
         }
-        
         const [roomId, room] = roomEntry;
-        
         if (room.gameState.gameOver) {
             socket.emit('error', 'O jogo já acabou');
             return;
         }
-        
-        // Verificar se é o turno do jogador
         const currentPlayerId = room.players[room.currentPlayerIndex];
         if (socket.id !== currentPlayerId) {
             socket.emit('error', 'Não é seu turno');
             return;
         }
         
-        // Processar ação
         let result;
         switch (type) {
             case 'reinforce':
                 result = processReinforce(roomId, socket.id, data.territoryId);
-                if (!result.success) {
-                    socket.emit('error', result.message);
-                }
+                if (!result.success) socket.emit('error', result.message);
                 break;
-                
             case 'attack':
                 result = processAttack(roomId, socket.id, data.attackerId, data.defenderId);
-                if (!result.success) {
-                    socket.emit('error', result.message);
-                }
+                if (!result.success) socket.emit('error', result.message);
                 break;
-                
             case 'nextPhase':
                 nextPhase(roomId, socket.id);
                 break;
-                
             case 'endTurn':
                 endTurn(roomId, socket.id);
                 break;
-                
-            default:
-                socket.emit('error', 'Ação desconhecida');
         }
     });
     
     // Desconexão
     socket.on('disconnect', () => {
         console.log('Cliente desconectado:', socket.id);
-        
-        // Remover jogador das salas
         for (const roomId in rooms) {
             const room = rooms[roomId];
             const index = room.players.indexOf(socket.id);
-            
             if (index !== -1) {
                 room.players.splice(index, 1);
-                
                 if (room.players.length === 0) {
                     delete rooms[roomId];
                 } else {
@@ -638,9 +576,10 @@ io.on('connection', (socket) => {
     });
 });
 
-// Iniciar servidor
-const PORT = 3000;
-server.listen(PORT, () => {
-    console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
-    console.log(`📱 Acesse o jogo em http://localhost:${PORT}/game.html`);
+// Iniciar servidor - VERSÃO CORRIGIDA PARA PRODUÇÃO
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Servidor rodando na porta ${PORT} e pronto para conexões externas!`);
+    console.log(`📱 Conecte-se a ele através da URL: https://dominio-urbano-server.onrender.com`);
+    console.log(`🌍 Acesse o jogo em: https://fominhaxeventos.com/du/index.html`);
 });
