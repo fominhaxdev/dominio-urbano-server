@@ -24,7 +24,7 @@ const io = new Server(server, {
 
 // Configuração do banco de dados MySQL (Hostinger)
 const dbConfig = {
-    host: 'mysql.hostinger.com',
+    host: 'sql123.hostinger.com',
     user: 'u131408987_DU',
     password: 'Eu991843135@', // 🔴 COLOQUE A SENHA CORRETA
     database: 'u131408987_DominioUrbano',
@@ -765,5 +765,6 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`📱 Conecte-se a ele através da URL: https://dominio-urbano-server.onrender.com`);
     console.log(`🌍 Acesse o jogo em: https://fominhaxeventos.com/du/index.html`);
 });
+
 
 
