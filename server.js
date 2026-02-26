@@ -3,6 +3,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
+const mysql = require('mysql2/promise');
 
 const app = express();
 const server = http.createServer(app);
@@ -21,15 +22,38 @@ const io = new Server(server, {
     } 
 });
 
+// Configuração do banco de dados MySQL (Hostinger)
+const dbConfig = {
+    host: 'localhost',
+    user: 'u131408987_DU',
+    password: 'SENHA_DO_BANCO_AQUI', // 🔴 COLOQUE A SENHA CORRETA
+    database: 'u131408987_DominioUrbano',
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+};
+
 // Rota de health check para o Render
 app.get('/', (req, res) => {
     res.send('🚀 Servidor do Domínio Urbano está rodando!');
 });
 
+// Testar conexão com o banco
+async function testDB() {
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        console.log('✅ Conectado ao banco de dados MySQL na Hostinger!');
+        await connection.end();
+    } catch (error) {
+        console.error('❌ Erro ao conectar ao banco:', error.message);
+    }
+}
+testDB();
+
 // Servir arquivos estáticos da pasta DOMINIO
 app.use(express.static('.'));
 
-// Configuração do mapa (copiada do seu game.js)
+// Configuração do mapa
 const territoriesConfig = [
     { 
         id: 1, 
@@ -174,7 +198,7 @@ const availableAgents = [
     }
 ];
 
-// Salas de jogo
+// Salas de jogo (em memória)
 const rooms = {};
 
 // Utilitários
@@ -182,52 +206,143 @@ function generateRoomId() {
     return crypto.randomBytes(3).toString('hex').toUpperCase();
 }
 
-// Criar estado inicial do jogo
-function createInitialGameState(players, factions) {
-    const [p1Id, p2Id] = players;
-    
-    // Embaralhar territórios
-    const shuffled = [...territoriesConfig].sort(() => Math.random() - 0.5);
-    
-    // Distribuir territórios alternadamente (4 cada)
-    const territories = shuffled.map((t, index) => ({
-        ...t,
-        owner: index < 4 ? p1Id : p2Id,
-        pc: 3,
-        defenseBonus: 0
-    }));
+// Função para registrar logs no banco
+async function registrarLog(salaDbId, mensagem, tipo = 'system') {
+    if (!salaDbId) return;
+    let connection;
+    try {
+        connection = await mysql.createConnection(dbConfig);
+        await connection.execute(
+            'INSERT INTO logs (sala_id, mensagem, tipo) VALUES (?, ?, ?)',
+            [salaDbId, mensagem, tipo]
+        );
+    } catch (error) {
+        console.error('Erro ao registrar log:', error);
+    } finally {
+        if (connection) await connection.end();
+    }
+}
 
-    return {
-        turn: 1,
-        phase: 'income',
-        players: {
-            [p1Id]: {
-                faction: factions[p1Id] || 'sentinels',
-                gold: 10,
-                influence: 5,
-                territories: territories.filter(t => t.owner === p1Id).map(t => t.id),
-                cards: [availableCards[0], availableCards[1]],
-                agents: [availableAgents[0]],
-                victoryPoints: 0
+// Criar estado inicial do jogo (AGORA SALVA NO BANCO)
+async function createInitialGameState(players, factions) {
+    const [p1Id, p2Id] = players;
+    const roomCode = generateRoomId();
+    
+    let connection;
+    try {
+        connection = await mysql.createConnection(dbConfig);
+        
+        // Inserir sala no banco
+        const [result] = await connection.execute(
+            'INSERT INTO salas (codigo) VALUES (?)',
+            [roomCode]
+        );
+        const salaDbId = result.insertId;
+        
+        // Inserir jogadores no banco
+        await connection.execute(
+            'INSERT INTO jogadores (sala_id, nome, faccao, ouro, influencia, territorios) VALUES (?, ?, ?, ?, ?, ?)',
+            [salaDbId, 'Jogador 1', factions[p1Id] || 'sentinels', 10, 5, 4]
+        );
+        await connection.execute(
+            'INSERT INTO jogadores (sala_id, nome, faccao, ouro, influencia, territorios) VALUES (?, ?, ?, ?, ?, ?)',
+            [salaDbId, 'Jogador 2', factions[p2Id] || 'heralds', 10, 5, 4]
+        );
+        
+        // Log inicial
+        await connection.execute(
+            'INSERT INTO logs (sala_id, mensagem, tipo) VALUES (?, ?, ?)',
+            [salaDbId, 'Sala criada', 'system']
+        );
+        
+        console.log(`✅ Sala ${roomCode} criada no banco com ID ${salaDbId}`);
+        await connection.end();
+        
+        // Embaralhar territórios
+        const shuffled = [...territoriesConfig].sort(() => Math.random() - 0.5);
+        const territories = shuffled.map((t, index) => ({
+            ...t,
+            owner: index < 4 ? p1Id : p2Id,
+            pc: 3,
+            defenseBonus: 0
+        }));
+
+        return {
+            turn: 1,
+            phase: 'income',
+            players: {
+                [p1Id]: {
+                    faction: factions[p1Id] || 'sentinels',
+                    gold: 10,
+                    influence: 5,
+                    territories: territories.filter(t => t.owner === p1Id).map(t => t.id),
+                    cards: [availableCards[0], availableCards[1]],
+                    agents: [availableAgents[0]],
+                    victoryPoints: 0
+                },
+                [p2Id]: {
+                    faction: factions[p2Id] || 'heralds',
+                    gold: 10,
+                    influence: 5,
+                    territories: territories.filter(t => t.owner === p2Id).map(t => t.id),
+                    cards: [availableCards[0], availableCards[1]],
+                    agents: [availableAgents[0]],
+                    victoryPoints: 0
+                }
             },
-            [p2Id]: {
-                faction: factions[p2Id] || 'heralds',
-                gold: 10,
-                influence: 5,
-                territories: territories.filter(t => t.owner === p2Id).map(t => t.id),
-                cards: [availableCards[0], availableCards[1]],
-                agents: [availableAgents[0]],
-                victoryPoints: 0
-            }
-        },
-        territories: territories,
-        gameOver: false,
-        winner: null
-    };
+            territories: territories,
+            gameOver: false,
+            winner: null,
+            dbId: salaDbId
+        };
+        
+    } catch (error) {
+        console.error('❌ Erro ao criar sala no banco:', error);
+        if (connection) await connection.end();
+        
+        // Fallback: criar sala apenas em memória se o banco falhar
+        console.log('⚠️ Usando fallback: criando sala apenas em memória');
+        const shuffled = [...territoriesConfig].sort(() => Math.random() - 0.5);
+        const territories = shuffled.map((t, index) => ({
+            ...t,
+            owner: index < 4 ? p1Id : p2Id,
+            pc: 3,
+            defenseBonus: 0
+        }));
+
+        return {
+            turn: 1,
+            phase: 'income',
+            players: {
+                [p1Id]: {
+                    faction: factions[p1Id] || 'sentinels',
+                    gold: 10,
+                    influence: 5,
+                    territories: territories.filter(t => t.owner === p1Id).map(t => t.id),
+                    cards: [availableCards[0], availableCards[1]],
+                    agents: [availableAgents[0]],
+                    victoryPoints: 0
+                },
+                [p2Id]: {
+                    faction: factions[p2Id] || 'heralds',
+                    gold: 10,
+                    influence: 5,
+                    territories: territories.filter(t => t.owner === p2Id).map(t => t.id),
+                    cards: [availableCards[0], availableCards[1]],
+                    agents: [availableAgents[0]],
+                    victoryPoints: 0
+                }
+            },
+            territories: territories,
+            gameOver: false,
+            winner: null,
+            dbId: null
+        };
+    }
 }
 
 // Processar fase de receita
-function processIncome(roomId, playerId) {
+async function processIncome(roomId, playerId) {
     const room = rooms[roomId];
     if (!room) return;
     
@@ -245,7 +360,6 @@ function processIncome(roomId, playerId) {
         }
     });
     
-    // Bônus da facção
     if (player.faction === 'magnates') {
         goldIncome = Math.floor(goldIncome * 1.3);
     }
@@ -253,7 +367,24 @@ function processIncome(roomId, playerId) {
     player.gold += goldIncome;
     player.influence += influenceIncome;
     
-    // Avançar para fase de reforço
+    // Atualizar no banco se tiver dbId
+    if (state.dbId) {
+        try {
+            const connection = await mysql.createConnection(dbConfig);
+            const jogadorNome = Object.keys(state.players)[0] === playerId ? 'Jogador 1' : 'Jogador 2';
+            
+            await connection.execute(
+                'UPDATE jogadores SET ouro = ?, influencia = ? WHERE sala_id = ? AND nome = ?',
+                [player.gold, player.influence, state.dbId, jogadorNome]
+            );
+            
+            await registrarLog(state.dbId, `Fase de Receita: +${goldIncome} Ouro, +${influenceIncome} Influência`, 'system');
+            await connection.end();
+        } catch (error) {
+            console.error('Erro ao atualizar banco:', error);
+        }
+    }
+    
     state.phase = 'reinforce';
     
     io.to(roomId).emit('gameStateUpdate', state);
@@ -265,7 +396,7 @@ function processIncome(roomId, playerId) {
 }
 
 // Processar reforço
-function processReinforce(roomId, playerId, territoryId) {
+async function processReinforce(roomId, playerId, territoryId) {
     const room = rooms[roomId];
     if (!room) return { success: false, message: 'Sala não encontrada' };
     
@@ -273,7 +404,6 @@ function processReinforce(roomId, playerId, territoryId) {
     const player = state.players[playerId];
     const territory = state.territories.find(t => t.id === territoryId);
     
-    // Validações
     if (state.phase !== 'reinforce') {
         return { success: false, message: 'Não está na fase de reforço' };
     }
@@ -286,9 +416,26 @@ function processReinforce(roomId, playerId, territoryId) {
         return { success: false, message: 'Ouro insuficiente' };
     }
     
-    // Processar reforço
     territory.pc += 1;
     player.gold -= 1;
+    
+    // Atualizar no banco
+    if (state.dbId) {
+        try {
+            const connection = await mysql.createConnection(dbConfig);
+            const jogadorNome = Object.keys(state.players)[0] === playerId ? 'Jogador 1' : 'Jogador 2';
+            
+            await connection.execute(
+                'UPDATE jogadores SET ouro = ? WHERE sala_id = ? AND nome = ?',
+                [player.gold, state.dbId, jogadorNome]
+            );
+            
+            await registrarLog(state.dbId, `Reforçou ${territory.name}: +1 PC`, 'player');
+            await connection.end();
+        } catch (error) {
+            console.error('Erro ao atualizar banco:', error);
+        }
+    }
     
     io.to(roomId).emit('gameStateUpdate', state);
     io.to(roomId).emit('log', {
@@ -301,7 +448,7 @@ function processReinforce(roomId, playerId, territoryId) {
 }
 
 // Processar ataque
-function processAttack(roomId, attackerId, attackerTerId, defenderTerId) {
+async function processAttack(roomId, attackerId, attackerTerId, defenderTerId) {
     const room = rooms[roomId];
     if (!room) return { success: false, message: 'Sala não encontrada' };
     
@@ -313,7 +460,6 @@ function processAttack(roomId, attackerId, attackerTerId, defenderTerId) {
     const attTer = state.territories.find(t => t.id === attackerTerId);
     const defTer = state.territories.find(t => t.id === defenderTerId);
     
-    // Validações
     if (state.phase !== 'action') {
         return { success: false, message: 'Não está na fase de ação' };
     }
@@ -334,41 +480,34 @@ function processAttack(roomId, attackerId, attackerTerId, defenderTerId) {
         return { success: false, message: 'Territórios não são adjacentes' };
     }
     
-    // Processar combate (RNG no servidor)
     const attackRoll = Math.floor(Math.random() * 3) + 1;
     const attackPower = attTer.pc * attackRoll;
     const defensePower = defTer.defense + defTer.pc * 2;
     
     let result;
+    let vitoria = false;
     
     if (attackPower > defensePower) {
-        // Vitória
+        vitoria = true;
         defTer.owner = attackerId;
         defTer.pc = Math.floor(attTer.pc / 2);
         attTer.pc = Math.floor(attTer.pc / 2);
         
-        // Atualizar listas de territórios
         attacker.territories.push(defTer.id);
         defender.territories = defender.territories.filter(id => id !== defTer.id);
         
         result = {
             success: true,
             victory: true,
-            message: `VITÓRIA! Conquistou ${defTer.name}`,
-            attackerTerId: attackerTerId,
-            defenderTerId: defenderTerId
+            message: `VITÓRIA! Conquistou ${defTer.name}`
         };
         
     } else {
-        // Derrota
         attTer.pc = Math.floor(attTer.pc / 3);
-        
         result = {
             success: true,
             victory: false,
-            message: `DERROTA! Não conseguiu conquistar ${defTer.name}`,
-            attackerTerId: attackerTerId,
-            defenderTerId: defenderTerId
+            message: `DERROTA! Não conseguiu conquistar ${defTer.name}`
         };
     }
     
@@ -383,10 +522,48 @@ function processAttack(roomId, attackerId, attackerTerId, defenderTerId) {
         io.to(roomId).emit('gameOver', { winner: attackerId });
     }
     
+    // Atualizar status da sala no banco se o jogo acabou
+    if (state.gameOver && state.dbId) {
+        try {
+            const connection = await mysql.createConnection(dbConfig);
+            await connection.execute(
+                'UPDATE salas SET status = ? WHERE id = ?',
+                ['finalizada', state.dbId]
+            );
+            await connection.end();
+        } catch (error) {
+            console.error('Erro ao atualizar status da sala:', error);
+        }
+    }
+    
+    // Atualizar banco com novos valores
+    if (state.dbId) {
+        try {
+            const connection = await mysql.createConnection(dbConfig);
+            const atacanteNome = Object.keys(state.players)[0] === attackerId ? 'Jogador 1' : 'Jogador 2';
+            const defensorNome = Object.keys(state.players)[0] === defenderId ? 'Jogador 1' : 'Jogador 2';
+            
+            await connection.execute(
+                'UPDATE jogadores SET ouro = ?, territorios = ? WHERE sala_id = ? AND nome = ?',
+                [attacker.gold, attacker.territories.length, state.dbId, atacanteNome]
+            );
+            
+            await connection.execute(
+                'UPDATE jogadores SET ouro = ?, territorios = ? WHERE sala_id = ? AND nome = ?',
+                [defender.gold, defender.territories.length, state.dbId, defensorNome]
+            );
+            
+            await registrarLog(state.dbId, result.message, vitoria ? 'player' : 'system');
+            await connection.end();
+        } catch (error) {
+            console.error('Erro ao atualizar banco:', error);
+        }
+    }
+    
     io.to(roomId).emit('gameStateUpdate', state);
     io.to(roomId).emit('log', {
         message: result.message,
-        type: result.victory ? 'player' : 'system',
+        type: vitoria ? 'player' : 'system',
         playerId: attackerId
     });
     
@@ -423,10 +600,8 @@ function endTurn(roomId, playerId) {
         return;
     }
     
-    // Trocar jogador
     room.currentPlayerIndex = room.currentPlayerIndex === 0 ? 1 : 0;
     
-    // Incrementar turno global quando voltar para o primeiro jogador
     if (room.currentPlayerIndex === 0) {
         state.turn++;
     }
@@ -445,7 +620,7 @@ io.on('connection', (socket) => {
     console.log('Cliente conectado:', socket.id);
     
     // Entrar no jogo (matchmaking automático)
-    socket.on('joinGame', ({ faction }, callback) => {
+    socket.on('joinGame', async ({ faction }, callback) => {
         console.log(`Jogador ${socket.id} tentando entrar com facção ${faction}`);
         
         let roomId = Object.keys(rooms).find(id => rooms[id].players.length === 1 && !rooms[id].gameState);
@@ -466,9 +641,13 @@ io.on('connection', (socket) => {
             room.players.push(socket.id);
             room.factions[socket.id] = faction;
             socket.join(roomId);
-            room.gameState = createInitialGameState(room.players, room.factions);
+            
+            // AGORA É ASSÍNCRONO - usar await
+            room.gameState = await createInitialGameState(room.players, room.factions);
+            
             console.log(`Jogador entrou na sala ${roomId}. Jogo iniciado!`);
             callback({ roomId, status: 'start' });
+            
             const firstPlayerId = room.players[0];
             io.to(firstPlayerId).emit('gameStart', { roomId, message: 'Um oponente entrou!' });
             io.to(roomId).emit('gameStateUpdate', room.gameState);
@@ -477,7 +656,7 @@ io.on('connection', (socket) => {
     });
     
     // Entrar em sala específica com código
-    socket.on('joinRoomWithCode', ({ roomCode, faction }) => {
+    socket.on('joinRoomWithCode', async ({ roomCode, faction }) => {
         console.log(`Jogador ${socket.id} tentando entrar na sala ${roomCode}`);
         const room = rooms[roomCode];
         
@@ -497,7 +676,10 @@ io.on('connection', (socket) => {
         room.players.push(socket.id);
         room.factions[socket.id] = faction;
         socket.join(roomCode);
-        room.gameState = createInitialGameState(room.players, room.factions);
+        
+        // AGORA É ASSÍNCRONO - usar await
+        room.gameState = await createInitialGameState(room.players, room.factions);
+        
         console.log(`Jogador entrou na sala ${roomCode}. Jogo iniciado!`);
         
         socket.emit('roomJoinResponse', { success: true, roomId: roomCode, status: 'start' });
@@ -521,7 +703,7 @@ io.on('connection', (socket) => {
     });
     
     // Ações do jogo
-    socket.on('gameAction', ({ type, data }) => {
+    socket.on('gameAction', async ({ type, data }) => {
         const roomEntry = Object.entries(rooms).find(([_, room]) => room.players.includes(socket.id));
         if (!roomEntry) {
             socket.emit('error', 'Você não está em uma sala');
@@ -541,11 +723,11 @@ io.on('connection', (socket) => {
         let result;
         switch (type) {
             case 'reinforce':
-                result = processReinforce(roomId, socket.id, data.territoryId);
+                result = await processReinforce(roomId, socket.id, data.territoryId);
                 if (!result.success) socket.emit('error', result.message);
                 break;
             case 'attack':
-                result = processAttack(roomId, socket.id, data.attackerId, data.defenderId);
+                result = await processAttack(roomId, socket.id, data.attackerId, data.defenderId);
                 if (!result.success) socket.emit('error', result.message);
                 break;
             case 'nextPhase':
@@ -576,10 +758,10 @@ io.on('connection', (socket) => {
     });
 });
 
-// Iniciar servidor - VERSÃO CORRIGIDA PARA PRODUÇÃO
+// Iniciar servidor
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Servidor rodando na porta ${PORT} e pronto para conexões externas!`);
+    console.log(`🚀 Servidor rodando na porta ${PORT}`);
     console.log(`📱 Conecte-se a ele através da URL: https://dominio-urbano-server.onrender.com`);
     console.log(`🌍 Acesse o jogo em: https://fominhaxeventos.com/du/index.html`);
 });
