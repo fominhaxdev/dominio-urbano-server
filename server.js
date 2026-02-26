@@ -26,7 +26,7 @@ const io = new Server(server, {
 const dbConfig = {
     host: 'localhost',
     user: 'u131408987_DU',
-    password: 'SENHA_DO_BANCO_AQUI', // 🔴 COLOQUE A SENHA CORRETA
+    password: 'Eu991843135@', // 🔴 COLOQUE A SENHA CORRETA
     database: 'u131408987_DominioUrbano',
     waitForConnections: true,
     connectionLimit: 10,
@@ -765,3 +765,4 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`📱 Conecte-se a ele através da URL: https://dominio-urbano-server.onrender.com`);
     console.log(`🌍 Acesse o jogo em: https://fominhaxeventos.com/du/index.html`);
 });
+
