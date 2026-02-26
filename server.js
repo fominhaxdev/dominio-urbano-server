@@ -22,16 +22,8 @@ const io = new Server(server, {
     } 
 });
 
-// Configuração do banco de dados MySQL (Hostinger)
-const dbConfig = {
-    host: 'svr728.hostinger.com',  // OU '212.85.3.231'
-    user: 'u131408987_DU',
-    password: 'Eu991843135@',
-    database: 'u131408987_DominioUrbano',
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
-};
+// Importar configuração do banco
+const db = require('./db-config.js');
 
 // Rota de health check para o Render
 app.get('/', (req, res) => {
@@ -765,6 +757,7 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`📱 Conecte-se a ele através da URL: https://dominio-urbano-server.onrender.com`);
     console.log(`🌍 Acesse o jogo em: https://fominhaxeventos.com/du/index.html`);
 });
+
 
 
 
